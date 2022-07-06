@@ -1137,7 +1137,7 @@ void choose_first_zoom(long long *file_bbox, std::vector<struct reader> &readers
 	}
 }
 
-int read_input(std::vector<source> &sources, char *fname, int maxzoom, int minzoom, int basezoom, double basezoom_marker_width, sqlite3 *outdb, const char *outdir, std::set<std::string> *exclude, std::set<std::string> *include, int exclude_all, json_object *filter, double droprate, int buffer, const char *tmpdir, double gamma, int read_parallel, int forcetable, const char *attribution, bool uses_gamma, long long *file_bbox, const char *prefilter, const char *postfilter, const char *description, bool guess_maxzoom, std::map<std::string, int> const *attribute_types, const char *pgm, std::map<std::string, attribute_op> const *attribute_accum, std::map<std::string, std::string> const &attribute_descriptions, std::string const &commandline) {
+int read_input(std::vector<source> &sources, char *fname, int maxzoom, int minzoom, int basezoom, double basezoom_marker_width, sqlite3 *outdb, pmtilesv2 *outfile, const char *outdir, std::set<std::string> *exclude, std::set<std::string> *include, int exclude_all, json_object *filter, double droprate, int buffer, const char *tmpdir, double gamma, int read_parallel, int forcetable, const char *attribution, bool uses_gamma, long long *file_bbox, const char *prefilter, const char *postfilter, const char *description, bool guess_maxzoom, std::map<std::string, int> const *attribute_types, const char *pgm, std::map<std::string, attribute_op> const *attribute_accum, std::map<std::string, std::string> const &attribute_descriptions, std::string const &commandline) {
 	int ret = EXIT_SUCCESS;
 
 	std::vector<struct reader> readers;
@@ -2339,7 +2339,7 @@ int read_input(std::vector<source> &sources, char *fname, int maxzoom, int minzo
 
 	std::atomic<unsigned> midx(0);
 	std::atomic<unsigned> midy(0);
-	int written = traverse_zooms(fd, size, meta, stringpool, &midx, &midy, maxzoom, minzoom, outdb, outdir, buffer, fname, tmpdir, gamma, full_detail, low_detail, min_detail, meta_off, pool_off, initial_x, initial_y, simplification, layermaps, prefilter, postfilter, attribute_accum, filter);
+	int written = traverse_zooms(fd, size, meta, stringpool, &midx, &midy, maxzoom, minzoom, outdb, outfile, outdir, buffer, fname, tmpdir, gamma, full_detail, low_detail, min_detail, meta_off, pool_off, initial_x, initial_y, simplification, layermaps, prefilter, postfilter, attribute_accum, filter);
 
 	if (maxzoom != written) {
 		if (written > minzoom) {
@@ -2533,8 +2533,10 @@ int main(int argc, char **argv) {
 	char *description = NULL;
 	char *layername = NULL;
 	char *out_mbtiles = NULL;
+	char *out_pmtiles = NULL;
 	char *out_dir = NULL;
 	sqlite3 *outdb = NULL;
+	pmtilesv2 *outfile = NULL;
 	int maxzoom = 14;
 	int minzoom = 0;
 	int basezoom = -1;
@@ -2896,11 +2898,29 @@ int main(int argc, char **argv) {
 				fprintf(stderr, "%s: Can't specify both %s and %s as output\n", argv[0], out_mbtiles, optarg);
 				exit(EXIT_FAILURE);
 			}
+			if (out_pmtiles != NULL) {
+				fprintf(stderr, "%s: Can't specify both %s and %s as output\n", argv[0], out_pmtiles, optarg);
+				exit(EXIT_FAILURE);
+			}
 			if (out_dir != NULL) {
 				fprintf(stderr, "%s: Can't specify both %s and %s as output\n", argv[0], out_dir, optarg);
 				exit(EXIT_FAILURE);
 			}
-			out_mbtiles = optarg;
+			{
+				size_t lenstr = strlen(optarg);
+				if (lenstr < 8) {
+					fprintf(stderr, "%s: Invalid -o: %s \n", argv[0], optarg);
+					exit(EXIT_FAILURE);
+				}
+				if (strncmp(optarg+(lenstr-8),".mbtiles",8) == 0) {
+					out_mbtiles = optarg;
+				} else if (strncmp(optarg+(lenstr-8),".pmtiles",8) == 0) {
+					out_pmtiles = optarg;
+				} else {
+					fprintf(stderr, "%s: Invalid -o: %s \n", argv[0], optarg);
+					exit(EXIT_FAILURE);
+				}
+			}
 			break;
 
 		case 'e':
@@ -3213,12 +3233,12 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "Forcing -g0 since -B or -r is not known\n");
 	}
 
-	if (out_mbtiles == NULL && out_dir == NULL) {
-		fprintf(stderr, "%s: must specify -o out.mbtiles or -e directory\n", argv[0]);
+	if (out_mbtiles == NULL && out_pmtiles == NULL && out_dir == NULL) {
+		fprintf(stderr, "%s: must specify -o out.mbtiles, -o out.pmtiles or -e directory\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	if (out_mbtiles != NULL && out_dir != NULL) {
+	if ((out_mbtiles != NULL || out_pmtiles != NULL) && out_dir != NULL) {
 		fprintf(stderr, "%s: Options -o and -e cannot be used together\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
@@ -3229,6 +3249,13 @@ int main(int argc, char **argv) {
 		}
 
 		outdb = mbtiles_open(out_mbtiles, argv, forcetable);
+	}
+	if (out_pmtiles != NULL) {
+		if (force) {
+			unlink(out_pmtiles);
+		}
+
+		outfile = pmtilesv2_open(out_pmtiles, argv, forcetable);
 	}
 	if (out_dir != NULL) {
 		check_dir(out_dir, argv, force, forcetable);
@@ -3258,10 +3285,14 @@ int main(int argc, char **argv) {
 
 	long long file_bbox[4] = {UINT_MAX, UINT_MAX, 0, 0};
 
-	ret = read_input(sources, name ? name : out_mbtiles ? out_mbtiles : out_dir, maxzoom, minzoom, basezoom, basezoom_marker_width, outdb, out_dir, &exclude, &include, exclude_all, filter, droprate, buffer, tmpdir, gamma, read_parallel, forcetable, attribution, gamma != 0, file_bbox, prefilter, postfilter, description, guess_maxzoom, &attribute_types, argv[0], &attribute_accum, attribute_descriptions, commandline);
+	ret = read_input(sources, name ? name : out_mbtiles ? out_mbtiles : out_dir, maxzoom, minzoom, basezoom, basezoom_marker_width, outdb, outfile, out_dir, &exclude, &include, exclude_all, filter, droprate, buffer, tmpdir, gamma, read_parallel, forcetable, attribution, gamma != 0, file_bbox, prefilter, postfilter, description, guess_maxzoom, &attribute_types, argv[0], &attribute_accum, attribute_descriptions, commandline);
 
 	if (outdb != NULL) {
 		mbtiles_close(outdb, argv[0]);
+	}
+
+	if (outfile != NULL) {
+		pmtilesv2_finalize(outfile, argv[0]);
 	}
 
 #ifdef MTRACE
