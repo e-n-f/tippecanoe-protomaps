@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <stdio.h>
+#include "mvt.hpp"
 
 enum json_write_tok {
 	JSON_WRITE_HASH,

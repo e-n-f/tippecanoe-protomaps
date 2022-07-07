@@ -8,7 +8,7 @@
 #include <atomic>
 #include <sys/stat.h>
 #include "geometry.hpp"
-#include "mbtiles.hpp"
+#include "metadata.hpp"
 #include "jsonpull/jsonpull.h"
 
 size_t fwrite_check(const void *ptr, size_t size, size_t nitems, FILE *stream, const char *fname);
