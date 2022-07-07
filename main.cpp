@@ -3292,7 +3292,7 @@ int main(int argc, char **argv) {
 	}
 
 	if (outfile != NULL) {
-		pmtilesv2_finalize(outfile, argv[0]);
+		pmtilesv2_finalize(outfile);
 	}
 
 #ifdef MTRACE
